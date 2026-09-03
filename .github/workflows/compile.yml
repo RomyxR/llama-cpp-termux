@@ -8,57 +8,62 @@ on:
 jobs:
   build-in-termux:
     runs-on: ubuntu-latest
-    container:
-      image: termux/termux-docker:latest
-      options: --user 1000 -e HOME=/data/data/com.termux/files/home
 
     steps:
-    - name: Build and Package
+    # 1. Настройка QEMU для эмуляции архитектуры aarch64
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm64
+
+    # 2. Запуск сборки в нативном ARM64 контейнере Termux
+    - name: Build llama.cpp inside Termux ARM64 container
       run: |
-        # 1. Настройка окружения
-        export HOME=/data/data/com.termux/files/home
-        mkdir -p $HOME
-        cd $HOME
+        docker run --rm \
+          --platform linux/arm64 \
+          --user 1000 \
+          -e HOME=/data/data/com.termux/files/home \
+          -v ${{ github.workspace }}:/sdcard \
+          termux/termux-docker:aarch64 bash -c "
+            export HOME=/data/data/com.termux/files/home
+            mkdir -p \$HOME
+            cd \$HOME
 
-        # 2. Обновление и установка пакетов
-        pkg update -y && pkg upgrade -y
-        pkg install -y cmake git ninja clang tar
+            # Обновление и установка нативных пакетов ARM64
+            pkg update -y && pkg upgrade -y
+            pkg install -y cmake git ninja clang tar file
 
-        # 3. Клонирование репозитория llama.cpp
-        git clone https://github.com/ggerganov/llama.cpp.git
-        cd llama.cpp && git fetch --tags
-        LLAMA_VER=$(git describe --tags --match "b*" --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
+            # Клонирование
+            git clone https://github.com/ggerganov/llama.cpp.git
+            cd llama.cpp && git fetch --tags
+            LLAMA_VER=\$(git describe --tags --match \"b*\" --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
 
-        # 4. Кросс-компиляция под ARM64 (aarch64)
-        cmake -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_SYSTEM_NAME=Linux \
-          -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-          -DCMAKE_C_FLAGS="-target aarch64-linux-android24" \
-          -DCMAKE_CXX_FLAGS="-target aarch64-linux-android24" \
-          -DGGML_NATIVE=OFF \
-          -DGGML_CPU_AARCH64=ON \
-          -DGGML_TESTS=OFF \
-          -DGGML_EXAMPLES=OFF \
-          -DLLAMA_BUILD_IS_DEV=OFF
+            # Нативная сборка под ARM64
+            cmake -B build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DGGML_TESTS=OFF \
+              -DGGML_EXAMPLES=OFF \
+              -DLLAMA_BUILD_IS_DEV=OFF
 
-        cmake --build build -j $(nproc) --target llama-cli llama-server
+            cmake --build build -j \$(nproc) --target llama-cli llama-server
 
-        # 5. Проверка архитектуры собранного файла
-        file build/bin/llama-cli
+            # Проверка формата итогового бинарника
+            file build/bin/llama-cli
 
-        # 6. Упаковка бинарников
-        mkdir -p ../llama-bin
-        cp build/bin/llama-cli ../llama-bin/
-        cp build/bin/llama-server ../llama-bin/
-        cd ..
-        
-        ARCHIVE_NAME="llama-${LLAMA_VER}-termux-arm64.tar.gz"
-        tar -czvf "$ARCHIVE_NAME" llama-bin/
-        
-        # Перенос архива в workspace для выгрузки в релиз
-        cp "$ARCHIVE_NAME" "$GITHUB_WORKSPACE/"
+            # Упаковка
+            mkdir -p ../llama-bin
+            cp build/bin/llama-cli ../llama-bin/
+            cp build/bin/llama-server ../llama-bin/
+            cd ..
+            
+            ARCHIVE_NAME=\"llama-\${LLAMA_VER}-termux-arm64.tar.gz\"
+            tar -czvf \"\$ARCHIVE_NAME\" llama-bin/
+            
+            # Копирование архива в монтированный workspace GitHub
+            cp \"\$ARCHIVE_NAME\" /sdcard/
+          "
 
+    # 3. Публикация релиза
     - name: Create GitHub Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
