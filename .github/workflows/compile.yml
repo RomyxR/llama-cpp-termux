@@ -10,26 +10,27 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: termux/termux-docker:latest
-      options: --user termux # Сразу запускаем всё от нужного пользователя
+      # Запускаем от UID 1000 и переопределяем HOME для корректной работы pkg
+      options: --user 1000 -e HOME=/data/data/com.termux/files/home
 
     steps:
     - name: Build and Package
       run: |
-        # 1. Установка зависимостей из вашего скрипта
+        # 1. Обновление окружения и установка зависимостей из вашего скрипта
         pkg update -y && pkg upgrade -y
         pkg install -y cmake git ninja clang tar
 
-        # 2. Клонирование и получение версии
+        # 2. Клонирование и получение оригинальной версии llama.cpp
         git clone https://github.com
         cd llama.cpp && git fetch --tags
         LLAMA_VER=$(git describe --tags --match "b*" --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
         echo "LATEST_BUILD=$LLAMA_VER" >> $GITHUB_ENV
 
-        # 3. Сборка вашего скрипта
+        # 3. Конфигурация и сборка по вашей схеме
         cmake -B build -G Ninja -DGGML_TESTS=OFF -DGGML_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_IS_DEV=OFF
         cmake --build build -j $(nproc) --target llama-cli llama-server
 
-        # 4. Создание архива
+        # 4. Упаковка бинарников в архив
         mkdir ../llama-bin
         cp build/bin/llama-cli ../llama-bin/
         cp build/bin/llama-server ../llama-bin/
