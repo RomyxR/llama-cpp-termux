@@ -2,8 +2,7 @@ name: Build llama.cpp for Termux
 
 on:
   push:
-    tags:
-      - 'v*' # Запускает сборку, когда вы пушите тег (например, v1.0.0)
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 jobs:
@@ -11,57 +10,36 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: termux/termux-docker:latest
+      options: --user termux # Сразу запускаем всё от нужного пользователя
 
     steps:
-    - name: Initialize Termux Environment
+    - name: Build and Package
       run: |
+        # 1. Установка зависимостей из вашего скрипта
         pkg update -y && pkg upgrade -y
         pkg install -y cmake git ninja clang tar
 
-    - name: Clone llama.cpp with tags
-      run: |
-        git clone https://github.com/ggml-org/llama.cpp
-        cd llama.cpp
-        git fetch --tags
+        # 2. Клонирование и получение версии
+        git clone https://github.com
+        cd llama.cpp && git fetch --tags
+        LLAMA_VER=$(git describe --tags --match "b*" --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
+        echo "LATEST_BUILD=$LLAMA_VER" >> $GITHUB_ENV
 
-    - name: Extract llama.cpp build version
-      id: get_version
-      run: |
-        cd llama.cpp
-        # Достаем оригинальный номер версии/сборки из git-окружения самого llama.cpp
-        LLAMA_CPP_VER=$(git describe --tags --match "b*" --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
-        echo "LATEST_BUILD=$LLAMA_CPP_VER" >> $GITHUB_ENV
-        echo "Найдена оригинальная версия llama.cpp: $LLAMA_CPP_VER"
-
-    - name: Configure CMake
-      run: |
-        cd llama.cpp
-        cmake -B build -G Ninja \
-          -DGGML_TESTS=OFF \
-          -DGGML_EXAMPLES=OFF \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DLLAMA_BUILD_IS_DEV=OFF
-
-    - name: Build Binaries
-      run: |
-        cd llama.cpp
+        # 3. Сборка вашего скрипта
+        cmake -B build -G Ninja -DGGML_TESTS=OFF -DGGML_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_IS_DEV=OFF
         cmake --build build -j $(nproc) --target llama-cli llama-server
 
-    - name: Create Archive with Version Name
-      run: |
-        mkdir llama-bin
-        cp llama.cpp/build/bin/llama-cli llama-bin/
-        cp llama.cpp/build/bin/llama-server llama-bin/
-        
-        # Архивируем, добавляя номер оригинальной сборки в имя файла (например: llama-b3620-termux.tar.gz)
-        tar -czvf llama-${{ env.LATEST_BUILD }}-termux-arm64.tar.gz llama-bin/
+        # 4. Создание архива
+        mkdir ../llama-bin
+        cp build/bin/llama-cli ../llama-bin/
+        cp build/bin/llama-server ../llama-bin/
+        cd .. && tar -czvf "llama-${LLAMA_VER}-termux-arm64.tar.gz" llama-bin/
 
     - name: Create GitHub Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
       with:
-        # Название релиза на GitHub будет содержать оригинальную версию (например: "Release v1.0.0 (llama.cpp b3620)")
-        name: Build ${{ github.ref_name }} (llama.cpp ${{ env.LATEST_BUILD }})"
+        name: "Release ${{ github.ref_name }} (llama.cpp ${{ env.LATEST_BUILD }})"
         files: llama-${{ env.LATEST_BUILD }}-termux-arm64.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
