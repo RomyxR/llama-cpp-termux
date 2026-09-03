@@ -10,37 +10,44 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: termux/termux-docker:latest
-      # Запускаем от UID 1000 и переопределяем HOME для корректной работы pkg
       options: --user 1000 -e HOME=/data/data/com.termux/files/home
 
     steps:
     - name: Build and Package
       run: |
-        # 1. Обновление окружения и установка зависимостей из вашего скрипта
+        # Задаем домашнюю директорию для безопасной работы ssh и pkg
+        export HOME=/data/data/com.termux/files/home
+        mkdir -p $HOME
+        cd $HOME
+
+        # 1. Обновление окружения и установка зависимостей
         pkg update -y && pkg upgrade -y
         pkg install -y cmake git ninja clang tar
 
-        # 2. Клонирование и получение оригинальной версии llama.cpp
-        git clone https://github.com
+        # 2. Клонирование репозитория llama.cpp
+        git clone https://github.com/ggerganov/llama.cpp.git
         cd llama.cpp && git fetch --tags
         LLAMA_VER=$(git describe --tags --match "b*" --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
         echo "LATEST_BUILD=$LLAMA_VER" >> $GITHUB_ENV
 
-        # 3. Конфигурация и сборка по вашей схеме
+        # 3. Конфигурация и сборка
         cmake -B build -G Ninja -DGGML_TESTS=OFF -DGGML_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_IS_DEV=OFF
         cmake --build build -j $(nproc) --target llama-cli llama-server
 
-        # 4. Упаковка бинарников в архив
-        mkdir ../llama-bin
+        # 4. Упаковка бинарников в архив и перемещение в рабочую область GitHub
+        mkdir -p ../llama-bin
         cp build/bin/llama-cli ../llama-bin/
         cp build/bin/llama-server ../llama-bin/
         cd .. && tar -czvf "llama-${LLAMA_VER}-termux-arm64.tar.gz" llama-bin/
+        
+        # Переносим архив в исходную директорию runner, чтобы Action мог забрать его для релиза
+        cp "llama-${LLAMA_VER}-termux-arm64.tar.gz" "$GITHUB_WORKSPACE/"
 
     - name: Create GitHub Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
       with:
         name: "Release ${{ github.ref_name }} (llama.cpp ${{ env.LATEST_BUILD }})"
-        files: llama-${{ env.LATEST_BUILD }}-termux-arm64.tar.gz
+        files: ${{ github.workspace }}/llama-*-termux-arm64.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
